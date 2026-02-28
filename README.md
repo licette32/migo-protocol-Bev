@@ -157,4 +157,6 @@ GET  /splits/:id/qr             QR interoperable SEP-7
 
 Beverly · Araceli · Tamara · Romina
 
+---
+
 **ImpactaBootcamp 2026** — construido sobre Stellar
