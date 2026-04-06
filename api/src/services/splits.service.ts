@@ -41,6 +41,11 @@ export async function getSplitByIdService(id: string) {
   const payments = await prisma.payment.findMany({ where: { splitId: id } });
   const totalPaid = payments.reduce((sum, p) => sum + p.convertedAmount, 0);
 
+  // DEX conversions introduce floating-point imprecision: a payment of 1 XLM
+  // may convert to 0.9999997 USDC instead of exactly 1.0. The tolerance window
+  // prevents the split from being stuck in PARTIAL when the payer has effectively
+  // covered the full amount. 0.0001 is well above JS float noise but below any
+  // meaningful underpayment.
   const TOLERANCE = 0.0001;
   let status = "PENDING";
   if (totalPaid >= split.totalAmount - TOLERANCE) status = "READY_FOR_SETTLEMENT";
