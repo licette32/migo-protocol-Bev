@@ -69,6 +69,13 @@ export async function sendSettlementPayment(
     throw new Error("Stellar env vars not loaded");
   }
 
+  const sanitizedAmount = new BigNumber(amount).toFixed(7, BigNumber.ROUND_DOWN);
+  if (new BigNumber(sanitizedAmount).isLessThanOrEqualTo(0)) {
+    throw new Error(
+      `Settlement amount too small: ${amount} rounds to zero at 7 decimal precision (minimum is 0.0000001)`
+    );
+  }
+
   const sourceKeypair = Keypair.fromSecret(MIGO_SECRET);
   const sourcePublic = sourceKeypair.publicKey();
   const account = await server.loadAccount(sourcePublic);
@@ -82,7 +89,7 @@ export async function sendSettlementPayment(
     operation = Operation.payment({
       destination: MERCHANT_PUBLIC,
       asset: destAsset,
-      amount,
+      amount: sanitizedAmount,
     });
   } else {
     const pathCall = server.strictReceivePaths(
@@ -118,7 +125,7 @@ export async function sendSettlementPayment(
       sendAsset: sourceAsset,
       sendMax,
       destAsset,
-      destAmount: amount,
+      destAmount: sanitizedAmount,
       path,
     });
   }
@@ -128,7 +135,7 @@ export async function sendSettlementPayment(
     networkPassphrase: Networks.TESTNET,
   })
     .addOperation(operation)
-    .setTimeout(0)
+    .setTimeout(30)
     .build();
 
   transaction.sign(sourceKeypair);

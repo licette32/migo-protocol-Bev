@@ -41,8 +41,9 @@ export async function getSplitByIdService(id: string) {
   const payments = await prisma.payment.findMany({ where: { splitId: id } });
   const totalPaid = payments.reduce((sum, p) => sum + p.convertedAmount, 0);
 
+  const TOLERANCE = 0.0001;
   let status = "PENDING";
-  if (totalPaid >= split.totalAmount) status = "READY_FOR_SETTLEMENT";
+  if (totalPaid >= split.totalAmount - TOLERANCE) status = "READY_FOR_SETTLEMENT";
   else if (totalPaid > 0) status = "PARTIAL";
 
   await prisma.split.update({ where: { id }, data: { status } });
@@ -70,12 +71,17 @@ export async function getPaymentIntent(splitId: string): Promise<PaymentIntent> 
 
 // Release settlement
 export async function releaseSettlement(splitId: string) {
+  const TOLERANCE = 0.0001;
   const split = await prisma.split.findUnique({ where: { id: splitId } });
   if (!split) throw new Error("Split not found");
   if (split.status === "SETTLED") throw new Error("Split already settled");
 
   const current = await getSplitByIdService(splitId);
   if (current.status !== "READY_FOR_SETTLEMENT") throw new Error("Split not ready for settlement");
+
+  const payments = await prisma.payment.findMany({ where: { splitId } });
+  const totalPaid = payments.reduce((sum, p) => sum + p.convertedAmount, 0);
+  if (totalPaid < split.totalAmount - TOLERANCE) throw new Error("Amount below tolerance for settlement");
 
   const txHash = await sendSettlementPayment(
     split.totalAmount.toString(),

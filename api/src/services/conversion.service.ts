@@ -4,54 +4,82 @@ const HORIZON_URL = process.env.STELLAR_NETWORK === "mainnet"
   ? process.env.STELLAR_HORIZON_URL_MAINNET ?? "https://horizon.stellar.org"
   : process.env.STELLAR_HORIZON_URL_TESTNET ?? "https://horizon-testnet.stellar.org";
 
-// tasa real desde stellar dex
+function destinationAssetsParam(settlement: AssetConfig): string {
+  if (settlement.network !== "stellar") {
+    throw new Error("Solo se convierte hacia settlement en red stellar");
+  }
+  if (settlement.type === "native") {
+    return "native";
+  }
+  return `${settlement.code}:${settlement.issuer}`;
+}
+
+function appendStrictSendSource(
+  params: URLSearchParams,
+  fromAsset: string
+): void {
+  if (fromAsset === "XLM") {
+    params.set("source_asset_type", "native");
+    return;
+  }
+  const issuer = process.env.ISSUER_PUBLIC_ASSET;
+  if (!issuer) {
+    throw new Error("ISSUER_PUBLIC_ASSET es requerido para pagos en activos crédito");
+  }
+  params.set("source_asset_type", "credit_alphanum4");
+  params.set("source_asset_code", fromAsset);
+  params.set("source_asset_issuer", issuer);
+}
 
 export async function getLiveConversionRate(
   fromAsset: string,
-  toAsset: string,
+  settlementAsset: AssetConfig,
   amount: number
 ): Promise<number> {
-  // si es el mismo asset, no hay conversion
-  if (fromAsset === toAsset) return 1;
-
-  //construir parametros segun el tipo de asset
-  const getAssetParams = (asset: string, prefix: string) => {
-    if (asset === "XLM") {
-      return `${prefix}_asset_type=native`;
+  if (fromAsset === settlementAsset.code) {
+    if (settlementAsset.type === "native" && fromAsset === "XLM") return 1;
+    if (
+      settlementAsset.type === "credit" &&
+      process.env.ISSUER_PUBLIC_ASSET === settlementAsset.issuer
+    ) {
+      return 1;
     }
-    // usdc y otros asssets de credicto
-    return `${prefix}_asset_type=credit_alphanum4` +
-          `&${prefix}_asset_code=${asset}` +
-          `&${prefix}_asset_issuer=${process.env.ISSUER_PUBLIC_ASSET}`
   }
 
-  const url = `${HORIZON_URL}/paths/strict-receive?` +
-              `${getAssetParams(fromAsset, "source")}` +
-              `&${getAssetParams(toAsset, "destination")}` +
-              `&destination_amount=${amount}` +
-              `&source_account=${process.env.ISSUER_PUBLIC}`
-  console.log("URL Horizon:", url);
+  const dest = destinationAssetsParam(settlementAsset);
+  const params = new URLSearchParams();
+  appendStrictSendSource(params, fromAsset);
+  params.set("source_amount", String(amount));
+  params.set("destination_assets", dest);
+
+  const url = `${HORIZON_URL}/paths/strict-send?${params.toString()}`;
   const response = await fetch(url);
 
-  if (!response.ok){
+  if (!response.ok) {
+    throw new Error(`Horizon no disponible: ${response.status}`);
+  }
+
+  const data = (await response.json()) as {
+    _embedded?: { records?: Array<Record<string, string>> };
+  };
+  const records = data._embedded?.records ?? [];
+  if (!records.length) {
     throw new Error(
-      `Horizon no disponible: ${response.status}`
+      `No hay liquidez en el Stellar DEX para cambiar ${amount} ${fromAsset} por ${dest}. ` +
+        `En testnet suele haber rutas hacia USDC de Circle (issuer GBBD47...). ` +
+        `Si usas un emisor propio, necesitas ofertas/liquidez contra XLM en el DEX.`
     );
   }
 
-  const data = await response.json();
-  if (!data._embedded?.records?.length) {
-    throw new Error (
-      `No hay ruta de conversión entre ${fromAsset} y ${toAsset}`
-    );
+  const best = records[0];
+  const destAmt = Number(best.destination_amount);
+  const srcAmt = Number(best.source_amount);
+  if (!srcAmt || Number.isNaN(destAmt)) {
+    throw new Error("Respuesta de path inválida desde Horizon");
   }
-  const bestPath = data._embedded.records[0];
-  const rate = Number(bestPath.destination_amount) /
-              Number(bestPath.source_amount);
-  return rate;
+  return destAmt / srcAmt;
 }
 
-// TODO: reemplazar con rates reales cuando se integren ARS/BRL on-chain
 export function getMockConversionRate(asset: string): number {
   const rates: Record<string, number> = {
     USDC: 1,
@@ -63,27 +91,38 @@ export function getMockConversionRate(asset: string): number {
   return rates[asset] ?? 1;
 }
 
-//conversion principal
 export async function convertToSettlement(
   originalAmount: number,
   originalAsset: string,
   settlementAsset: AssetConfig
-) {// Si es la misma moneda → no convertir
-  if (originalAsset === settlementAsset.code) {
-    return {
-      conversionRate: 1,
-      convertedAmount: originalAmount,
+) {
+  if (settlementAsset.network === "stellar") {
+    const sameNative =
+      originalAsset === "XLM" && settlementAsset.type === "native";
+    const sameCredit =
+      settlementAsset.type === "credit" &&
+      originalAsset === settlementAsset.code &&
+      process.env.ISSUER_PUBLIC_ASSET === settlementAsset.issuer;
+    if (sameNative || sameCredit) {
+      return {
+        conversionRate: 1,
+        convertedAmount: originalAmount,
+      };
     }
   }
+
   try {
     const rate = await getLiveConversionRate(
-      originalAsset, settlementAsset.code, originalAmount
+      originalAsset,
+      settlementAsset,
+      originalAmount
     );
-    return { conversionRate: rate, convertedAmount: originalAmount * rate, };
-  }  catch (err){ 
+    return {
+      conversionRate: rate,
+      convertedAmount: originalAmount * rate,
+    };
+  } catch (err) {
     console.error(`[Conversion] Horizon falló: ${err}`);
     throw new Error(`No se pudo obtener tasa de conversión: ${err}`);
-
   }
 }
-
