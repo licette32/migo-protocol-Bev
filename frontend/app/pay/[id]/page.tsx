@@ -5,8 +5,9 @@ import { use, useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Image from 'next/image';
 import { motion } from 'framer-motion';
-import { ArrowLeft, Wallet, ExternalLink, ArrowRight } from 'lucide-react';
+import { ArrowLeft, Wallet, ExternalLink, ArrowRight, CreditCard } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { createPomeloPayment } from '@/lib/payment-providers/pomelo';
 
 const CURRENCIES = [
   { code: 'XLM', name: 'Stellar Lumens', icon: '💎', color: 'from-blue-500 to-blue-600' },
@@ -94,6 +95,20 @@ const shareAmount = split.totalAmount / personas;
   const amountInSelectedCurrency = (shareAmount * rates[selectedCurrency]).toFixed(
     selectedCurrency === 'BTC' || selectedCurrency === 'ETH' ? 6 : 2
   );
+
+const handlePayWithCard = async () => {
+    try {
+      const currency = selectedCurrency === 'ARS' ? 'ARS' : 'USD';
+      const { checkoutUrl } = await createPomeloPayment({
+        amount: parseFloat(amountInSelectedCurrency),
+        currency: currency as 'ARS' | 'USD',
+        splitId: split.id,
+      });
+      window.location.href = checkoutUrl;
+    } catch (err: any) {
+      alert('Error al iniciar el pago con tarjeta: ' + err.message);
+    }
+  };
 
 const handlePayWithWallet = async (walletAction: string) => {
     try {
@@ -183,6 +198,16 @@ const handlePayWithWallet = async (walletAction: string) => {
             className="w-full h-16 text-lg font-semibold bg-gradient-to-r from-[#00D9FF] to-[#00B8DD] hover:opacity-90 text-white shadow-lg shadow-[#00D9FF]/20"
           >
             <Wallet className="w-6 h-6 mr-2" /> Pagar con mi Wallet
+          </Button>
+        </motion.div>
+
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }}>
+          <Button
+            onClick={handlePayWithCard}
+            variant="outline"
+            className="w-full h-16 text-lg font-semibold border-2 border-slate-600 hover:border-[#00D9FF] hover:bg-[#00D9FF]/5 text-white"
+          >
+            <CreditCard className="w-6 h-6 mr-2" /> Pagar con tarjeta
           </Button>
         </motion.div>
 
